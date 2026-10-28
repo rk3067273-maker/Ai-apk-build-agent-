@@ -1,0 +1,6 @@
+{
+  "name": "AgentStudio",
+  "description": "Multi-provider AI App Builder with Voice Input, GitHub Sync, and APK CI/CD pipeline",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
