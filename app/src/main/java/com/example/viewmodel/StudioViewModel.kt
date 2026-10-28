@@ -79,6 +79,8 @@ data class StudioUiState(
     val currentPushFile: String = "",
     val lastPushResult: PushResult? = null,
     val pushError: String? = null,
+    val isInstallingWorkflow: Boolean = false,
+    val workflowInstallMessage: String? = null,
     val detectedClipboardToken: String? = null,
     val gitHubAuthMethod: Int = 0, // 0: Google/Browser Web Login, 1: Direct Token
     // Export Zip
@@ -774,6 +776,68 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         isPushingToGitHub = false,
                         pushError = "ফাইল পুশ ব্যর্থ: ${pushResult.exceptionOrNull()?.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun getWorkflowYaml(): String = gitHubApi.defaultWorkflowYml
+
+    fun installActionsWorkflow() {
+        val token = _uiState.value.githubToken.trim()
+        val repo = _uiState.value.githubRepoName.trim()
+
+        if (token.isBlank()) {
+            _uiState.update { it.copy(pushError = "অনুগ্রহ করে প্রথমে GitHub টোকেন দিয়ে কানেক্ট করুন।") }
+            return
+        }
+        if (repo.isBlank()) {
+            _uiState.update { it.copy(pushError = "অনুগ্রহ করে রিপোজিটরির নাম দিন।") }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isInstallingWorkflow = true,
+                workflowInstallMessage = null,
+                pushError = null
+            )
+        }
+
+        viewModelScope.launch {
+            if (token == "ghp_agentstudio_demo_token_sandbox") {
+                kotlinx.coroutines.delay(1200)
+                _uiState.update {
+                    it.copy(
+                        isInstallingWorkflow = false,
+                        workflowInstallMessage = "✅ স্যান্ডবক্স রিপোজিটরিতে GitHub Actions APK বিল্ডার সফলভাবে তৈরি হয়েছে! Actions রান চালু হয়েছে।"
+                    )
+                }
+                return@launch
+            }
+
+            // Ensure repo exists first
+            gitHubApi.ensureRepository(
+                token = token,
+                repoName = repo,
+                description = "Android app build with AgentStudio AI"
+            )
+
+            val result = gitHubApi.installWorkflowToRepo(token, repo)
+            if (result.isSuccess) {
+                val actionsUrl = result.getOrNull().orEmpty()
+                _uiState.update {
+                    it.copy(
+                        isInstallingWorkflow = false,
+                        workflowInstallMessage = "✅ GitHub Actions APK বিল্ডার (.github/workflows/build-apk.yml) সফলভাবে তৈরি করা হয়েছে! Actions ট্যাবে এখনই APK তৈরি শুরু হয়ে গেছে।"
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(
+                        isInstallingWorkflow = false,
+                        pushError = "Actions Workflow ইনস্টল ব্যর্থ: ${result.exceptionOrNull()?.message}"
                     )
                 }
             }

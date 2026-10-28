@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -46,6 +47,7 @@ fun GitHubDeployScreen(
 ) {
     val context = LocalContext.current
     var isTokenVisible by remember { mutableStateOf(false) }
+    var isWorkflowCodeExpanded by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // Auto check clipboard for token on screen entry
@@ -496,6 +498,191 @@ fun GitHubDeployScreen(
                 }
             }
         }
+
+        // GitHub Actions CI/CD Workflow Setup & Fix Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBackground),
+            border = androidx.compose.foundation.BorderStroke(1.dp, if (uiState.workflowInstallMessage != null) EmeraldGreen else AmberWarning.copy(alpha = 0.5f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (uiState.workflowInstallMessage != null) EmeraldGreen.copy(alpha = 0.15f) else AmberWarning.copy(alpha = 0.15f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                if (uiState.workflowInstallMessage != null) Icons.Default.CheckCircle else Icons.Default.Build,
+                                contentDescription = null,
+                                tint = if (uiState.workflowInstallMessage != null) EmeraldGreen else AmberWarning,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "GitHub Actions APK বিল্ডার সেটআপ",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = if (uiState.workflowInstallMessage != null) "ওয়ার্কফ্লো ইনস্টল সফল" else "Actions ট্যাবে APK বিল্ড চালু করার সমাধান",
+                            fontSize = 11.sp,
+                            color = if (uiState.workflowInstallMessage != null) EmeraldGreen else AmberWarning
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = "GitHub Actions-এ 'Get started with GitHub Actions' দেখার কারণ হলো রিপোজিটরিতে '.github/workflows/build-apk.yml' ফাইলটি নেই। নিচের বাটনে ট্যাপ করলে স্বয়ংক্রিয়ভাবে আপনার রিপোজিটরিতে এটি পুশ হয়ে যাবে এবং সাথে সাথে ক্লাউডে APK বিল্ড রান করবে।",
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    lineHeight = 17.sp
+                )
+
+                if (uiState.workflowInstallMessage != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = EmeraldGreen.copy(alpha = 0.15f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = uiState.workflowInstallMessage,
+                                fontSize = 12.sp,
+                                color = EmeraldGreen,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // 1-Click Install Workflow to Repo Button
+                Button(
+                    onClick = { viewModel.installActionsWorkflow() },
+                    enabled = !uiState.isInstallingWorkflow && uiState.githubToken.isNotBlank() && uiState.githubRepoName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (uiState.workflowInstallMessage != null) EmeraldGreen else NeonCyan,
+                        contentColor = BackgroundDark
+                    )
+                ) {
+                    if (uiState.isInstallingWorkflow) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BackgroundDark, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Actions বিল্ডার পুশ করা হচ্ছে...", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (uiState.workflowInstallMessage != null) "পুনরায় Workflow আপডেট করুন" else "⚡ ১-ক্লিকে Actions APK বিল্ডার ইনস্টল করুন",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Copy YAML & Manual Browser Paste Options
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("GitHub Actions Workflow YAML", viewModel.getWorkflowYaml())
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, "✅ Workflow YAML ক্লিপবোর্ডে কপি হয়েছে!", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "কপি ব্যর্থ: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("কপি YAML", fontSize = 11.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val user = uiState.githubUsername.ifBlank { "rk3067273-maker" }
+                            val repo = uiState.githubRepoName.ifBlank { "Ai-apk-builder" }
+                            val url = "https://github.com/$user/$repo/new/main?filename=.github/workflows/build-apk.yml"
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1.2f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, tint = AmberWarning, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("GitHub এডিটরে যান ↗", fontSize = 11.sp)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = { isWorkflowCodeExpanded = !isWorkflowCodeExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        if (isWorkflowCodeExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        if (isWorkflowCodeExpanded) "Workflow কোড লুকান" else "সম্পূর্ণ Workflow YAML কোড প্রিভিউ দেখুন",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+                }
+
+                if (isWorkflowCodeExpanded) {
+                    Spacer(Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = BackgroundDark,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderDark),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = viewModel.getWorkflowYaml(),
+                            fontSize = 10.sp,
+                            color = NeonCyan,
+                            modifier = Modifier.padding(10.dp),
+                            lineHeight = 14.sp
+                        )
+                    }
+                }
+            }
+        }
+
 
         // Push Progress Indicator
         if (uiState.isPushingToGitHub) {

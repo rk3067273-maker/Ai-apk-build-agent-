@@ -215,4 +215,161 @@ class GitHubApiService(
             Result.failure(e)
         }
     }
+
+    suspend fun installWorkflowToRepo(
+        token: String,
+        repoName: String,
+        workflowContent: String = DEFAULT_WORKFLOW_YML
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val userRes = verifyToken(token)
+            val username = userRes.getOrNull()?.login ?: return@withContext Result.failure(IOException("Invalid token or authentication failed"))
+
+            val filePath = ".github/workflows/build-apk.yml"
+            val fileUrl = "$GITHUB_API/repos/$username/$repoName/contents/$filePath"
+
+            // Check if file already exists to get its sha
+            val getRequest = Request.Builder()
+                .url(fileUrl)
+                .header("Authorization", "Bearer ${token.trim()}")
+                .header("Accept", "application/vnd.github.v3+json")
+                .header("User-Agent", "AgentStudio-Android")
+                .get()
+                .build()
+
+            val getResponse = client.newCall(getRequest).execute()
+            var existingSha: String? = null
+            if (getResponse.isSuccessful) {
+                val getBody = getResponse.body?.string().orEmpty()
+                if (getBody.isNotBlank()) {
+                    existingSha = JSONObject(getBody).optString("sha")
+                }
+            }
+
+            val base64Content = Base64.encodeToString(
+                workflowContent.toByteArray(StandardCharsets.UTF_8),
+                Base64.NO_WRAP
+            )
+
+            val putPayload = JSONObject().apply {
+                put("message", "Add GitHub Actions APK Builder CI/CD workflow")
+                put("content", base64Content)
+                if (!existingSha.isNullOrBlank()) {
+                    put("sha", existingSha)
+                }
+            }
+
+            val putRequest = Request.Builder()
+                .url(fileUrl)
+                .header("Authorization", "Bearer ${token.trim()}")
+                .header("Accept", "application/vnd.github.v3+json")
+                .header("User-Agent", "AgentStudio-Android")
+                .put(putPayload.toString().toRequestBody(JSON_MEDIA))
+                .build()
+
+            val putResponse = client.newCall(putRequest).execute()
+            val putBody = putResponse.body?.string().orEmpty()
+            if (!putResponse.isSuccessful) {
+                return@withContext Result.failure(IOException("Failed to install workflow [${putResponse.code}]: $putBody"))
+            }
+
+            Result.success("https://github.com/$username/$repoName/actions")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    val defaultWorkflowYml: String
+        get() = DEFAULT_WORKFLOW_YML
 }
+
+const val DEFAULT_WORKFLOW_YML: String = """name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Keystore and Environment
+        run: |
+          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+            cp .env.example .env
+          elif [ ! -f ".env" ]; then
+            touch .env
+          fi
+
+          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore || true
+          fi
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
+
+      - name: Ensure Gradle Wrapper Exists
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            gradle wrapper || true
+          fi
+          if [ -f "./gradlew" ]; then
+            chmod +x gradlew
+          fi
+
+      - name: Build Debug APK
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/*.apk
+          tag_name: apk-v${"$"}{{ github.run_number }}
+          name: Android APK v${"$"}{{ github.run_number }}
+          body: |
+            ### 📱 Android APK Successfully Built!
+            
+            **Installation Instructions:**
+            1. Download the `.apk` file below directly to your Android device.
+            2. Tap on the downloaded file to install.
+            3. If prompted, allow **Install from Unknown Sources** in Settings.
+            4. Launch and enjoy!
+        env:
+          GITHUB_TOKEN: ${"$"}{{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+"""
+

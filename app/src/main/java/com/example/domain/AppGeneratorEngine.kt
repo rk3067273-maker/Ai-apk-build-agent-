@@ -224,8 +224,31 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Keystore and Environment
+        run: |
+          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+            cp .env.example .env
+          elif [ ! -f ".env" ]; then
+            touch .env
+          fi
+          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore || true
+          fi
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
+
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            gradle wrapper || true
+          fi
+          if [ -f "./gradlew" ]; then
+            chmod +x gradlew
+          fi
 
       - name: Build Debug APK with Gradle
         run: |
@@ -240,10 +263,10 @@ jobs:
         with:
           name: ${appName}-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          retention-days: 30
 
       - name: Create Release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/debug/*.apk
@@ -262,6 +285,13 @@ jobs:
         continue-on-error: true
         """.trimIndent()
 
+        result.add(
+            ProjectFile(
+                path = ".github/workflows/build-apk.yml",
+                content = workflowContent,
+                isWorkflow = true
+            )
+        )
         result.add(
             ProjectFile(
                 path = ".github/workflows/android_apk_build.yml",
