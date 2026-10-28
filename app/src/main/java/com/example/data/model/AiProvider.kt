@@ -32,9 +32,15 @@ enum class AiProviderType(
     ),
     AGENT_ROUTER(
         displayName = "Agent Router / Custom",
-        defaultBaseUrl = "https://api.agentrouter.org/v1",
-        defaultModels = listOf("claude-3-5-sonnet-20241022", "gpt-4o", "deepseek-coder", "custom-model"),
-        description = "Custom agent proxy, Claude, or local OpenAI-compatible endpoint"
+        defaultBaseUrl = "https://openrouter.ai/api/v1",
+        defaultModels = listOf(
+            "anthropic/claude-3.5-sonnet",
+            "claude-3-5-sonnet-20241022",
+            "deepseek/deepseek-r1",
+            "openai/gpt-4o",
+            "custom-model"
+        ),
+        description = "Unified gateway, Claude proxy, or custom OpenAI-compatible endpoint"
     )
 }
 
@@ -46,7 +52,11 @@ data class ProviderSetting(
     val availableModels: List<String> = emptyList()
 ) {
     val activeBaseUrl: String
-        get() = if (customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') else providerType.defaultBaseUrl
+        get() = when {
+            customBaseUrl.isNotBlank() && !customBaseUrl.contains("agentrouter.org") -> customBaseUrl.trimEnd('/')
+            customBaseUrl.contains("agentrouter.org") -> "https://openrouter.ai/api/v1"
+            else -> providerType.defaultBaseUrl
+        }
 
     val activeModel: String
         get() = if (selectedModel.isNotBlank()) selectedModel else (availableModels.firstOrNull() ?: providerType.defaultModels.first())

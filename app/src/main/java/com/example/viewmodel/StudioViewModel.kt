@@ -119,10 +119,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             for (type in AiProviderType.values()) {
                 val savedConfig = dao.getProviderConfig(type.name)
                 val setting = if (savedConfig != null) {
+                    val rawUrl = savedConfig.customBaseUrl
+                    val cleanUrl = if (rawUrl.contains("agentrouter.org")) {
+                        "https://openrouter.ai/api/v1"
+                    } else {
+                        rawUrl
+                    }
                     ProviderSetting(
                         providerType = type,
                         apiKey = savedConfig.apiKey,
-                        customBaseUrl = savedConfig.customBaseUrl,
+                        customBaseUrl = cleanUrl,
                         selectedModel = savedConfig.selectedModel,
                         availableModels = if (savedConfig.customModelsJson.isNotBlank()) {
                             savedConfig.customModelsJson.split(",")
@@ -882,9 +888,67 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun testActiveProviderConnection() {
-        val activeProvider = _uiState.value.activeProvider
-        val setting = _uiState.value.providerSettings[activeProvider] ?: return
+    fun applyUrlPreset(
+        providerType: AiProviderType,
+        baseUrl: String,
+        models: List<String>,
+        defaultModel: String? = null
+    ) {
+        val currentSetting = _uiState.value.providerSettings[providerType] ?: ProviderSetting(providerType)
+        val targetModel = defaultModel ?: models.firstOrNull() ?: currentSetting.activeModel
+        val updated = currentSetting.copy(
+            customBaseUrl = baseUrl,
+            availableModels = models,
+            selectedModel = targetModel
+        )
+        val newMap = _uiState.value.providerSettings.toMutableMap().apply { put(providerType, updated) }
+        _uiState.update {
+            it.copy(
+                providerSettings = newMap,
+                connectionTestResult = null,
+                contextLimit = getContextLimitForModel(targetModel)
+            )
+        }
+        saveProviderConfig(updated)
+    }
+
+    fun fixAgentRouterUrl(providerType: AiProviderType = AiProviderType.AGENT_ROUTER) {
+        applyUrlPreset(
+            providerType = providerType,
+            baseUrl = "https://openrouter.ai/api/v1",
+            models = listOf(
+                "anthropic/claude-3.5-sonnet",
+                "deepseek/deepseek-r1",
+                "openai/gpt-4o",
+                "google/gemini-2.0-flash-001"
+            ),
+            defaultModel = "anthropic/claude-3.5-sonnet"
+        )
+    }
+
+    fun testActiveProviderConnection(providerType: AiProviderType? = null) {
+        val targetProvider = providerType ?: _uiState.value.activeProvider
+        val setting = _uiState.value.providerSettings[targetProvider] ?: return
+
+        if (setting.apiKey.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    isTestingConnection = false,
+                    connectionTestResult = "⚠️ API Key দেওয়া হয়নি! অনুগ্রহ করে প্রথমে '${targetProvider.displayName} API Key' ফিল্ডে আপনার Key দিন।"
+                )
+            }
+            return
+        }
+
+        if (setting.activeBaseUrl.contains("agentrouter.org")) {
+            _uiState.update {
+                it.copy(
+                    isTestingConnection = false,
+                    connectionTestResult = "❌ ভুল ডোমেইন: 'api.agentrouter.org' ইন্টারনেটে সক্রিয় নয়। দয়া করে নিচের 'OpenRouter' প্রিসেট সিলেক্ট করুন (https://openrouter.ai/api/v1)।"
+                )
+            }
+            return
+        }
 
         _uiState.update { it.copy(isTestingConnection = true, connectionTestResult = null) }
         viewModelScope.launch {
@@ -894,15 +958,33 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.update {
                     it.copy(
                         isTestingConnection = false,
-                        connectionTestResult = "✅ কানেকশন সফল! (${ms}ms) মডেল রেসপন্স দিচ্ছে।"
+                        connectionTestResult = "✅ কানেকশন সফল! (${ms}ms) '${targetProvider.displayName}' রেসপন্স দিচ্ছে।"
                     )
                 }
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Unknown error"
+                val ex = result.exceptionOrNull()
+                val rawErr = ex?.message.orEmpty()
+                val localizedError = when {
+                    rawErr == "EMPTY_KEY" -> "⚠️ API Key দেওয়া হয়নি! অনুগ্রহ করে API Key ইনপুট দিন।"
+                    rawErr == "INVALID_AGENTROUTER_DOMAIN" || rawErr.contains("agentrouter.org") ->
+                        "❌ ভুল ডোমেইন: 'api.agentrouter.org' নিষ্ক্রিয়। নিচে দেওয়া 'OpenRouter' প্রিসেটে ট্যাপ করে ঠিক করুন।"
+                    rawErr.contains("Unable to resolve host", ignoreCase = true) || rawErr.contains("UnknownHostException", ignoreCase = true) || rawErr.contains("No address associated", ignoreCase = true) ->
+                        "❌ হোস্ট ডোমেইন পাওয়া যায়নি (${setting.activeBaseUrl})! সার্ভার অ্যাড্রেস ভুল বা ইন্টারনেট নেই। দয়া করে নিচের প্রিসেট থেকে OpenRouter বা DeepSeek সিলেক্ট করুন।"
+                    rawErr.contains("401", ignoreCase = true) || rawErr.contains("Unauthorized", ignoreCase = true) ->
+                        "❌ অথেন্টিকেশন ব্যর্থ (401 Unauthorized): আপনার দেওয়া API Key টি সঠিক নয় বা মেয়াদোত্তীর্ণ।"
+                    rawErr.contains("404", ignoreCase = true) || rawErr.contains("Not Found", ignoreCase = true) ->
+                        "❌ এন্ডপয়েন্ট পাওয়া যায়নি (404 Not Found): নির্বাচিত মডেল (${setting.activeModel}) এই সার্ভারে সাপোর্ট করে না অথবা URL ভুল।"
+                    rawErr.contains("429", ignoreCase = true) || rawErr.contains("quota", ignoreCase = true) || rawErr.contains("rate", ignoreCase = true) ->
+                        "❌ ক্রেডিট বা কোটা শেষ (429 Rate Limit): আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স/ক্রেডিট নেই।"
+                    rawErr.contains("timeout", ignoreCase = true) || rawErr.contains("timed out", ignoreCase = true) ->
+                        "❌ টাইমআউট: সার্ভার নির্দিষ্ট সময়ের মধ্যে সাড়া দেয়নি।"
+                    else -> "❌ কানেকশন ব্যর্থ: $rawErr"
+                }
+
                 _uiState.update {
                     it.copy(
                         isTestingConnection = false,
-                        connectionTestResult = "❌ কানেকশন ব্যর্থ: $err"
+                        connectionTestResult = localizedError
                     )
                 }
             }

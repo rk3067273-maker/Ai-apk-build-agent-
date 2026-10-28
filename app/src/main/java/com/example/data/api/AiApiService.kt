@@ -37,6 +37,12 @@ class AiApiService(
     suspend fun testConnection(setting: ProviderSetting): Result<Long> = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
         try {
+            if (setting.apiKey.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("EMPTY_KEY"))
+            }
+            if (setting.activeBaseUrl.contains("agentrouter.org")) {
+                return@withContext Result.failure(IllegalArgumentException("INVALID_AGENTROUTER_DOMAIN"))
+            }
             val response = generateContent(
                 setting = setting,
                 systemPrompt = "You are a test ping responder.",
@@ -88,8 +94,22 @@ class AiApiService(
             "${baseUrl.trimEnd('/')}/chat/completions"
         }
 
+        // Seamless mapping for OpenRouter models
+        val effectiveModel = if (baseUrl.contains("openrouter.ai") || setting.providerType == AiProviderType.OPEN_ROUTER) {
+            when (setting.activeModel) {
+                "claude-3-5-sonnet-20241022", "claude-3.5-sonnet" -> "anthropic/claude-3.5-sonnet"
+                "gpt-4o" -> "openai/gpt-4o"
+                "gpt-4o-mini" -> "openai/gpt-4o-mini"
+                "deepseek-coder" -> "deepseek/deepseek-chat"
+                "deepseek-r1" -> "deepseek/deepseek-r1"
+                else -> setting.activeModel
+            }
+        } else {
+            setting.activeModel
+        }
+
         val requestJson = JSONObject().apply {
-            put("model", setting.activeModel)
+            put("model", effectiveModel)
             val messages = JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
@@ -113,7 +133,7 @@ class AiApiService(
             requestBuilder.header("Authorization", "Bearer ${setting.apiKey.trim()}")
         }
 
-        if (setting.providerType == AiProviderType.OPEN_ROUTER) {
+        if (setting.providerType == AiProviderType.OPEN_ROUTER || baseUrl.contains("openrouter.ai")) {
             requestBuilder.header("HTTP-Referer", "https://agentstudio.ai")
             requestBuilder.header("X-Title", "AgentStudio Android")
         }
